@@ -346,7 +346,7 @@ public class DelegateManager: NSObject, URLSessionDataDelegate, URLSessionDownlo
     /// this is for global request handling
     var requestHandler:((inout URLRequest) -> Void)?
     
-    var taskMap = Dictionary<Int,Response>()
+    var taskMap = ThreadSafeDictionary<Int,Response>()
     //"install" a task by adding the task to the map and setting the completion handler
     func addTask(_ task: URLSessionTask, completionHandler:@escaping ((Response) -> Void)) {
         addResponseForTask(task)
@@ -552,5 +552,66 @@ open class HTTPQueue {
         activeReq[next.task.taskIdentifier] = next
         mutex.unlock()
         return next
+    }
+}
+
+class ThreadSafeDictionary<V: Hashable,T>: Collection {
+    private var dictionary: [V: T]
+    private let concurrentQueue = DispatchQueue(
+        label: "Dictionary Barrier Queue",
+        attributes: .concurrent
+    )
+    var startIndex: Dictionary<V, T>.Index {
+        self.concurrentQueue.sync {
+            return self.dictionary.startIndex
+        }
+    }
+
+    var endIndex: Dictionary<V, T>.Index {
+        self.concurrentQueue.sync {
+            return self.dictionary.endIndex
+        }
+    }
+
+    init(dict: [V: T] = [V:T]()) {
+        self.dictionary = dict
+    }
+    // this is because it is an apple protocol method
+    func index(after i: Dictionary<V, T>.Index) -> Dictionary<V, T>.Index {
+        self.concurrentQueue.sync {
+            return self.dictionary.index(after: i)
+        }
+    }
+
+    subscript(key: V) -> T? {
+        set(newValue) {
+            self.concurrentQueue.async(flags: .barrier) {[weak self] in
+                self?.dictionary[key] = newValue
+            }
+        }
+        get {
+            self.concurrentQueue.sync {
+                return self.dictionary[key]
+            }
+        }
+    }
+
+    // has implicity get
+    subscript(index: Dictionary<V, T>.Index) -> Dictionary<V, T>.Element {
+        self.concurrentQueue.sync {
+            return self.dictionary[index]
+        }
+    }
+
+    func removeValue(forKey key: V) {
+        self.concurrentQueue.async(flags: .barrier) {[weak self] in
+            self?.dictionary.removeValue(forKey: key)
+        }
+    }
+
+    func removeAll() {
+        self.concurrentQueue.async(flags: .barrier) {[weak self] in
+            self?.dictionary.removeAll()
+        }
     }
 }
